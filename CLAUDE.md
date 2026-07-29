@@ -1,23 +1,116 @@
-# cryo-ml continuation instructions
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+This repository reproduces the 77 K SKY130 BSIM4 workflow of arXiv:2604.21625v1
+in the authors' confirmed NGSpice setup, then extracts the paper's seven BSIM4
+parameters with ML (a parameter-to-I-V surrogate searched inversely, plus a
+direct one-pass MLP), validates every reported vector in real NGSpice, and
+exports a cryogenic model-card library.
 
 Read `docs/HANDOFF.md` before changing code or launching a job. It is the
-authoritative live handoff for the July 2026 rebase.
+authoritative live handoff for the July 2026 rebase. The pipeline and final
+verification are **complete**: do not resume extraction, training, scaling, or
+bulk NGSpice jobs by default.
 
 ## Canonical setup
 
 - Upstream: `ogzamour/CryoPDK_Skywater130nm_ML`, commit
-  `39b1e518e25120104225b8fa19f4cfc61a6766b3`.
+  `39b1e518e25120104225b8fa19f4cfc61a6766b3`, vendored at
+  `data/raw/CryoPDK_Skywater130nm_ML`.
 - Simulator: conda-forge ngspice-41 at
   `/Users/anrunw/cryo-ng41/mm/envs/ng41/bin/ngspice`.
 - pFET card: the upstream `update_sky130_fd_pr__pfet_01v8_lvt__tt_77k.corner.spice`.
 - Metric: the faithful `rrmsCalc.py` port in `src/cryoml/metrics.py`.
 - Tuned parameters: `VTH0, U0, NFACTOR, VSAT, DELTA, RDSW, ETA0` only.
+- Devices: all 18 paper Table-6 geometries (8 nMOS + 10 pMOS), 11 curves each.
 - Synthetic data: 10,000-point Latin hypercube in the published parameter
-  vector's +/-10% box, with all 11 metric curves simulated.
+  vector's +/-10% box, with all 11 metric curves simulated
+  (`data/processed/pdk_synth/*.npz`, ~2.3 GB, gitignored).
 
 Older June results, README text, research notes, and Claude memories describe a
 different corrected-repository/ngspice-46/all-curve setup. They are historical,
 not instructions for the current run.
+
+## Commands
+
+Environment (every Python invocation needs both):
+
+```bash
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+export NGSPICE_BIN=<path to a conda-forge ngspice-41 binary>
+export PYTHONPATH=src
+python scripts/setup_data.py          # validate pinned upstream, install pFET card
+```
+
+Warning: if `NGSPICE_BIN` is unset and the pinned ngspice-41 path is absent,
+`resolve_ngspice_bin()` silently falls back to `ngspice` on PATH, which may be
+a different major version (e.g. Homebrew ngspice-46 — the historical June
+setup, not valid for the confirmed workflow). Always confirm the simulator is
+ngspice-41 before any NGSpice-backed run. On a fresh checkout, `.venv` and
+`data/raw/` do not exist until the setup steps above have been run.
+
+Tests and lightweight checks (safe to run anytime):
+
+```bash
+PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -v
+PYTHONPATH=src .venv/bin/python -m unittest tests.test_metrics -v   # one module
+PYTHONPATH=src .venv/bin/python -m unittest \
+  tests.test_metrics.ConfirmedSetupMetricTests.test_clean_current_zeroes_glitches_before_last_zero
+.venv/bin/python -m compileall -q src scripts
+.venv/bin/python scripts/setup_data.py --skip-clone   # revalidate pinned inputs
+git diff --check
+```
+
+`scripts/verify_simulator.py` (checks all 198 upstream sweeps) runs NGSpice
+heavily; treat it as a compute-heavy stage.
+
+Full reproduction order and exact production flags are in `docs/HANDOFF.md`
+("Reproduction commands") and `README.md`. Stage order: `verify_simulator.py`
+-> `pdk_baseline.py` -> `pdk_gen_data.py` -> `pdk_ml_extract.py` ->
+`make_ml_variants.py` -> `pdk_direct_mlp.py` -> FD studies -> scaling ->
+exploratory diagnostics -> `pdk_compare.py` / `export_ml_cards.py` /
+`make_paper_tables.py` / `make_figs.py` / `make_simple_slides.py`.
+Training scripts take `--device mps`.
+
+## Architecture
+
+`src/cryoml/` is the library; `scripts/` are pipeline stages that compose it;
+`out/` and `figs/` hold generated artifacts. Data flows:
+measured curves + published cards (vendored upstream repo) -> LHC synthetic
+I-V datasets -> trained emulator / MLP -> candidate parameter vectors -> real
+NGSpice re-simulation -> frozen-inclusion RRMS scoring -> tables/figures/cards.
+
+- `config.py` — all repo paths, pinned upstream URLs/commits, and
+  `resolve_ngspice_bin()` (honors `NGSPICE_BIN`).
+- `devices.py` — the frozen 18-device Table-6 list with paper RRMS/sigma.
+- `paper_data.py` / `data_io.py` — locate and load measured I-V `Curve`s from
+  the vendored paper repository.
+- `spice_pdk.py` — NGSpice backend: writes decks matching the upstream
+  per-device `sweeps.spice` conventions (temp=-196.15, pMOS sweep direction,
+  parasitics, multiplicity, native geometry-bin selection) and parses currents.
+  `CRYOML_SPICE_TIMEOUT` bounds a single simulation.
+- `metrics.py` — two metric families: the legacy all-curve RRMS (continuity
+  only) and the confirmed `rrmsCalc.py` port (`device_rrms_new`): per-curve
+  RMSE/mean|I_meas| on 11 fixed curves with glitch cleaning, trims, and
+  curve-exclusion rules. This is the only reportable metric.
+- `pdk_extract.py` — the seven-parameter theta layout (order fixed:
+  vth0, u0, nfactor, vsat, delta, rdsw, eta0), the +/-10% box transform, the
+  frozen-inclusion objective, and the FD least-squares polish that perturbs
+  card parameters through fresh NGSpice runs.
+
+Each experiment series writes to its own `out/` directory
+(`out/pdk_direct_mlp`, `out/pdk_ml_emu_raw`, `out/pdk_ml_emu`,
+`out/pdk_foundation_emu`, `out/pdk_high_voltage_guarded`); the canonical
+export is `out/pdk_ml_selected/cards`. `scripts/make_ml_variants.py` splits a
+surrogate run into the `emu_search` / `emu_search+fd` stages and fails rather
+than substituting a missing stage. Reporting scripts (`pdk_compare.py`,
+`make_paper_tables.py`, `make_figs.py`) read only these fixed series.
+
+`docs/METHODS.md` holds metric/method definitions; `docs/RESEARCH_LOG.md` is
+the append-only history; `CONTRIBUTING.md` states the shared-asset and
+experiment-integrity conventions.
 
 ## Non-negotiable reporting policy
 
