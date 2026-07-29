@@ -1,6 +1,9 @@
-"""BSIM4 7-parameter extraction against the confirmed NGSpice-41 chain.
+"""BSIM4 parameter extraction against the confirmed NGSpice-41 chain.
 
-Theta layout (order fixed): vth0, u0, nfactor, vsat, delta, rdsw, eta0.
+Theta layout is ``ACTIVE_PARAMS`` (order fixed), selected by the
+``CRYOML_PARAM_SET`` environment variable: the canonical 7-parameter set
+``vth0, u0, nfactor, vsat, delta, rdsw, eta0`` (default, all published
+series), or the experimental 15-parameter superset ``params15``.
 
 The current pipeline uses a linear +/-10% box around each bin's published
 effective parameter values, matching the confirmed upstream's Latin-hypercube
@@ -14,6 +17,7 @@ published-card baseline. The older all-curve objective remains for continuity.
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import tempfile
@@ -35,6 +39,25 @@ from .utils import get_logger
 logger = get_logger("cryoml.pdk_extract")
 
 PARAMS7 = ("vth0", "u0", "nfactor", "vsat", "delta", "rdsw", "eta0")
+# Extended experimental set: the paper's 7 plus output-conductance
+# (pclm, pdiblc1, pdiblc2), saturation-knee shape (ags), vertical-field
+# mobility shape (ua, ub), subthreshold offset (voff), and gate-bias-
+# dependent S/D resistance (prwg). Zero-published parameters are frozen by
+# the ±10% box: pdiblc1 is active only on nMOS bins, prwg only on pMOS.
+PARAMS15 = PARAMS7 + ("pclm", "pdiblc1", "pdiblc2", "ags",
+                      "ua", "ub", "voff", "prwg")
+PARAM_SETS = {"params7": PARAMS7, "params15": PARAMS15}
+
+# The active tuned-parameter set is resolved once at import from
+# CRYOML_PARAM_SET so that multiprocessing spawn workers (which re-import
+# this module in a fresh interpreter) agree with the parent process. Unset
+# means the canonical 7-parameter protocol; every published series uses it.
+ACTIVE_PARAM_SET = os.environ.get("CRYOML_PARAM_SET", "params7")
+if ACTIVE_PARAM_SET not in PARAM_SETS:
+    raise RuntimeError(f"CRYOML_PARAM_SET={ACTIVE_PARAM_SET!r} unknown; "
+                       f"expected one of {sorted(PARAM_SETS)}")
+ACTIVE_PARAMS = PARAM_SETS[ACTIVE_PARAM_SET]
+
 PENALTY = 10.0
 
 
@@ -98,16 +121,16 @@ def read_bin_params(dev_type: str, L_um: float, W_um: float,
             + _instance_line(dev_type, L_um, W_um) +
             f"VG ng 0 DC {1.0 * sign}\nVD nd 0 DC {1.0 * sign}\n.op\n"
             ".control\nrun\n"
-            f"showmod m.xm1.m{_SUBCKT[dev_type]} : {' '.join(PARAMS7)}\n"
+            f"showmod m.xm1.m{_SUBCKT[dev_type]} : {' '.join(ACTIVE_PARAMS)}\n"
             "quit\n.endc\n.end\n")
         out = subprocess.run([_NGSPICE_BIN, "-b", str(deck)],
                              capture_output=True, text=True, timeout=30).stdout
     vals: dict[str, float] = {}
-    for p in PARAMS7:
+    for p in ACTIVE_PARAMS:
         m = re.search(rf"^\s*{p}\s+([0-9eE.+\-]+)\s*$", out, re.MULTILINE)
         if m:
             vals[p] = float(m.group(1))
-    missing = [p for p in PARAMS7 if p not in vals]
+    missing = [p for p in ACTIVE_PARAMS if p not in vals]
     if missing:
         raise RuntimeError(f"showmod readback missing {missing} for "
                            f"{dev_type} bin {bin_index}: {out[-500:]}")
@@ -202,7 +225,7 @@ class LhcBox:
     hi: np.ndarray = field(init=False)
 
     def __post_init__(self) -> None:
-        v = np.array([float(self.published[p]) for p in PARAMS7],
+        v = np.array([float(self.published[p]) for p in ACTIVE_PARAMS],
                      dtype=np.float64)
         b1, b2 = (1.0 - self.frac) * v, (1.0 + self.frac) * v
         self.lo = np.minimum(b1, b2)
@@ -215,10 +238,11 @@ class LhcBox:
         z = np.asarray(z, dtype=np.float64)
         s = 1.0 / (1.0 + np.exp(-z))
         x = self.lo + (self.hi - self.lo) * s
-        return {p: float(x[i]) for i, p in enumerate(PARAMS7)}
+        return {p: float(x[i]) for i, p in enumerate(ACTIVE_PARAMS)}
 
     def params_to_z(self, params: dict[str, float]) -> np.ndarray:
-        x = np.array([float(params[p]) for p in PARAMS7], dtype=np.float64)
+        x = np.array([float(params[p]) for p in ACTIVE_PARAMS],
+                     dtype=np.float64)
         frac = (x - self.lo) / (self.hi - self.lo)
         frac = np.clip(frac, 1e-6, 1 - 1e-6)
         return np.clip(np.log(frac / (1 - frac)), -13.9, 13.9)
@@ -233,6 +257,9 @@ def make_box(dev_type: str, L_um: float, W_um: float, bin_index: int,
     """Box factory: "lhc10" = confirmed-setup ±10 % LHC box (default),
     "wide" = the legacy broad sigmoid box."""
     if mode == "wide":
+        if ACTIVE_PARAMS != PARAMS7:
+            raise ValueError("the legacy wide box supports only the "
+                             "canonical 7-parameter set")
         return theta_box_for(dev_type, L_um, W_um, bin_index)
     if mode == "lhc10":
         pub = read_bin_params(dev_type, L_um, W_um, bin_index)

@@ -117,21 +117,34 @@ def baseline_include_tags(tag: str) -> set[str]:
 
 def extract_device(d, tdev, n_adam_starts=512, adam_steps=400, n_validate=8,
                    n_polish=3, max_nfev=80, seed=0,
-                   emu_sizes=(256, 256, 256), emu_save_path=None):
+                   emu_sizes=(256, 256, 256), emu_save_path=None,
+                   synth_dir=None):
     from cryoml.metrics import clean_current
-    from cryoml.pdk_extract import (LhcBox, PARAMS7, ThetaBox,
-                                    eval_params_new, new_metric_layout,
-                                    residual_fn_new)
+    from cryoml.pdk_extract import (ACTIVE_PARAM_SET, ACTIVE_PARAMS, LhcBox,
+                                    ThetaBox, eval_params_new,
+                                    new_metric_layout, residual_fn_new)
     from scipy.optimize import least_squares
 
     tag = device_tag(d.dev_type, d.L_um, d.W_um)
     t0 = time.time()
     set_seed(seed)
-    data = np.load(SYNTH / f"{tag}.npz", allow_pickle=True)
+    data = np.load((synth_dir or SYNTH) / f"{tag}.npz", allow_pickle=True)
     IDS, ok = data["IDS"], data["ok"]
     meas, slices = data["meas"], data["slices"]
     bin_index = int(data["bin_index"])
-    published = {p: float(v) for p, v in zip(PARAMS7, data["published"])}
+    n_par = len(ACTIVE_PARAMS)
+    # The dataset must have been generated with the same theta layout; fail
+    # rather than silently reinterpreting columns.
+    if "param_names" in data:
+        stored = tuple(str(p) for p in data["param_names"])
+        if stored != ACTIVE_PARAMS:
+            raise RuntimeError(f"{tag}: dataset param_names {stored} do not "
+                               f"match active set {ACTIVE_PARAMS}")
+    elif n_par != len(data["published"]):
+        raise RuntimeError(f"{tag}: dataset has {len(data['published'])} "
+                           f"parameters; active set expects {n_par}")
+    published = {p: float(v)
+                 for p, v in zip(ACTIVE_PARAMS, data["published"])}
     box_mode = str(data["box_mode"]) if "box_mode" in data else "wide"
     if box_mode == "lhc10":
         box = LhcBox(dev_type=d.dev_type, bin_index=bin_index,
@@ -144,7 +157,8 @@ def extract_device(d, tdev, n_adam_starts=512, adam_steps=400, n_validate=8,
     # recompute z from physical theta with the CURRENT box so the dataset
     # stays valid even when bound definitions evolve
     THETA = data["THETA"].astype(np.float64)
-    Z = np.stack([box.params_to_z({p: t[i] for i, p in enumerate(PARAMS7)})
+    Z = np.stack([box.params_to_z({p: t[i]
+                                   for i, p in enumerate(ACTIVE_PARAMS)})
                   for t in THETA])
     curves = load_device_curves(d)
     include_tags = baseline_include_tags(tag)
@@ -181,7 +195,7 @@ def extract_device(d, tdev, n_adam_starts=512, adam_steps=400, n_validate=8,
     P = Yt.shape[1]
 
     # ---------------- emulator E(z) -> slog Id ----------------
-    emu = mlp([7, *emu_sizes, P]).to(dev)
+    emu = mlp([n_par, *emu_sizes, P]).to(dev)
     emu_val = train_net(emu, Zt, Yt, dev, epochs=2000, lr=1e-3,
                         batch=4096 if len(Zt) > 4000 else None)
     if emu_save_path is not None:
@@ -202,12 +216,13 @@ def extract_device(d, tdev, n_adam_starts=512, adam_steps=400, n_validate=8,
     n_fixed = 1
     if isinstance(box, LhcBox):
         # uniform coverage of the ±10 % box: z = logit(u), u ~ U(0.001, 0.999)
-        u = rng.uniform(1e-3, 1 - 1e-3, size=(S - S // 2 - n_fixed, 7))
+        u = rng.uniform(1e-3, 1 - 1e-3, size=(S - S // 2 - n_fixed, n_par))
         box_starts = np.log(u / (1 - u))
-        local = z0 + rng.normal(0, 2.0, size=(S // 2, 7))
+        local = z0 + rng.normal(0, 2.0, size=(S // 2, n_par))
     else:
-        box_starts = rng.uniform(-3.0, 3.0, size=(S - S // 2 - n_fixed, 7))
-        local = z0 + rng.normal(0, 0.7, size=(S // 2, 7))
+        box_starts = rng.uniform(-3.0, 3.0,
+                                 size=(S - S // 2 - n_fixed, n_par))
+        local = z0 + rng.normal(0, 0.7, size=(S // 2, n_par))
     starts = np.concatenate([
         z0[None, :], local, box_starts,
     ], axis=0)
@@ -366,6 +381,7 @@ def extract_device(d, tdev, n_adam_starts=512, adam_steps=400, n_validate=8,
     rec = {
         "device": tag, "dev_type": d.dev_type, "L_um": d.L_um, "W_um": d.W_um,
         "bin_index": bin_index, "paper_reported": d.paper_rrms,
+        "param_set": ACTIVE_PARAM_SET, "param_names": list(ACTIVE_PARAMS),
         "box_mode": box_mode, "include_tags": sorted(include_tags),
         "selection_policy": "fixed surrogate search, with FD as an ablation",
         "emulator_val_mse": float(emu_val),
@@ -405,9 +421,29 @@ def main() -> int:
     ap.add_argument("--emu-arch", default="256,256,256",
                     help="comma-separated emulator hidden sizes")
     ap.add_argument("--out-dir", default=None)
+    ap.add_argument("--param-set", default="params7",
+                    choices=("params7", "params15"),
+                    help="tuned-parameter set; params7 is the canonical "
+                         "protocol, params15 the labeled experiment")
+    ap.add_argument("--synth-dir", default=None,
+                    help="synthetic dataset directory (default: pdk_synth "
+                         "for params7, pdk_synth_<set> otherwise)")
     ap.add_argument("--resume", action="store_true",
                     help="Skip devices with an existing finite result")
     args = ap.parse_args()
+
+    # Resolve before the lazy cryoml.pdk_extract import inside extract_device.
+    import os
+    os.environ["CRYOML_PARAM_SET"] = args.param_set
+    if args.synth_dir:
+        synth_dir = Path(args.synth_dir)
+    elif args.param_set == "params7":
+        synth_dir = SYNTH
+    else:
+        synth_dir = PROCESSED_DIR / f"pdk_synth_{args.param_set}"
+    if args.param_set != "params7" and not args.out_dir:
+        ap.error("--param-set experiments must name an explicit --out-dir "
+                 "so canonical series are never overwritten")
 
     ensure_dirs()
     out_dir = Path(args.out_dir) if args.out_dir else OUT_ML
@@ -430,7 +466,8 @@ def main() -> int:
             adam_steps=args.adam_steps, n_validate=args.n_validate,
             n_polish=args.n_polish, max_nfev=args.max_nfev, seed=args.seed,
             emu_sizes=emu_sizes,
-            emu_save_path=out_dir / f"emu_{tag}.pt")
+            emu_save_path=out_dir / f"emu_{tag}.pt",
+            synth_dir=synth_dir)
         rows.append(rec)
         json.dump(rec, open(out_dir / f"ml_{rec['device']}.json", "w"), indent=2)
         np.savez(out_dir / f"sims_{rec['device']}.npz",
