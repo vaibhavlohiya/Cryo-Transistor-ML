@@ -532,3 +532,34 @@ the cryogenic + open-simulator-verified setting, not the NN machinery:
 - [ ] FD-deployable control (out/pdk_fd_deploy)
 - [ ] If v2 insufficient: emulator ensembles, round-3 active sampling
       around v2 winners, stronger inverse (curve-embedding arch)
+
+## 15-parameter extraction experiment (2026-08-05)
+
+First run of the configurable-theta mechanism added on the `parameters`
+branch (`CRYOML_PARAM_SET`, commit 17dd813). Same confirmed setup, box,
+metric, freeze rules, and production search recipe as the canonical
+campaign; only the theta vector changes, from the paper's 7 to 15 BSIM4
+parameters: + `pclm, pdiblc1, pdiblc2, ags, ua, ub, voff, prwg`.
+
+- A showmod survey of all 18 bins drove the final list: `pvag` (originally
+  proposed) is zero-published on every bin and hence dead inside the ±10%
+  multiplicative box; `ags` took its slot. `pdiblc1`/`prwg` are
+  zero-published on the pMOS/nMOS family respectively and stay pinned
+  there, so each device searches 14 live dimensions.
+- Patched-published z=0 cards reproduce the bare published card to ~1e-6
+  relative current on both families, so box centers are trustworthy.
+- Data: 10,000-sample LHC per device, all 11 curves, real ngspice-41
+  (`data/processed/pdk_synth_params15/`, ~2.3 GB, regenerable).
+- Results (frozen-inclusion): **nMOS 0.0746, pMOS 0.3260, combined
+  0.2003, all-device 0.2143, 18/18 wins vs the published card** — better
+  than the canonical 7-param surrogate+FD (0.2140/0.2290) and the
+  exploratory foundation+FD (0.2114/0.2261) on every aggregate.
+- Raw 15-D surrogate search (0.2699 all-device) is worse than raw 7-D
+  (0.2357): same sample budget, harder search space. FD polish recovers
+  it (0.2699 → 0.2143) — the surrogate only needs to find the basin.
+- 67/270 winning values (25%) peg a ±10% box edge (`delta` 11, `ub` 9,
+  `ags` 8, `ua` 8 devices): the data wants several parameters outside
+  ±10% of published. Follow-up candidate: selectively wider box.
+- Status: labeled experiment per protocol. Not the canonical export; no
+  Table 4/6 or figure changes. Full report:
+  `out/tables/params15_study.{md,json,csv}`.
