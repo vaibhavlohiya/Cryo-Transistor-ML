@@ -16,6 +16,7 @@ slides/
 # --- Raw + heavy processed data (regenerate with scripts/setup_data.py) ---
 data/raw/
 data/processed/pdk_synth/*.npz
+data/processed/pdk_synth_*/
 !data/raw/.gitkeep
 !data/processed/.gitkeep
 !data/processed/pdk_synth/.gitkeep
