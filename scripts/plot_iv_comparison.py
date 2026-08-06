@@ -70,6 +70,10 @@ class IVBlock:
     y_label: str = "$|I_D|$ (µA)"
     note: str = ""                      # e.g. "V_GS = 1.85 V"
     metrics: dict[str, float] = field(default_factory=dict)   # method -> RRMS
+    # Optional non-ML baseline (e.g. the published card). Drawn as neutral
+    # chrome so it never consumes one of the validated method colour slots.
+    reference: np.ndarray | None = None
+    reference_label: str = "Published card"
 
     def __post_init__(self) -> None:
         self.x = np.abs(np.asarray(self.x, dtype=np.float64))
@@ -84,6 +88,11 @@ class IVBlock:
                 raise ValueError(f"{self.title}/{name}: {pred.size} points, "
                                  f"x has {n}")
             self.predictions[name] = pred
+        if self.reference is not None:
+            self.reference = np.asarray(self.reference, dtype=np.float64)
+            if self.reference.size != n:
+                raise ValueError(f"{self.title}/reference: "
+                                 f"{self.reference.size} points, x has {n}")
 
 
 def _apply_style() -> None:
@@ -132,11 +141,16 @@ def plot_iv_blocks(
     nrows = int(np.ceil(len(blocks) / ncols))
     figsize = figsize or (6.4 * ncols, (4.6 if residuals else 3.7) * nrows)
     fig = plt.figure(figsize=figsize)
+    # Reserve bottom space for however many rows the legend will wrap to,
+    # so it never lands on the last row's x-labels.
+    legend_cols = 3
+    n_legend = len(methods) + 1 + (blocks[0].reference is not None)
+    bottom = 0.055 + 0.030 * int(np.ceil(n_legend / legend_cols))
     # Outer grid separates blocks; the inner pair (curve + residual strip)
     # stays tightly coupled, so a strip's x-label never lands on the next
     # block's title.
     gs = GridSpec(nrows, ncols, figure=fig, hspace=0.34, wspace=0.24,
-                  top=0.885 if suptitle else 0.965, bottom=0.085,
+                  top=0.885 if suptitle else 0.965, bottom=bottom,
                   left=0.072, right=0.985)
 
     for i, block in enumerate(blocks):
@@ -159,6 +173,15 @@ def plot_iv_blocks(
                 zorder=5)
         ax.plot(block.x, meas, "o", mfc="none", mec=MEASURED, mew=1.1,
                 ms=5.2, ls="none", zorder=6, label="Measured")
+
+        if block.reference is not None:
+            ax.plot(block.x, np.abs(block.reference) * scale, color=MUTED,
+                    ls=(0, (5, 3)), lw=1.6, zorder=3,
+                    label=block.reference_label)
+            if axr is not None:
+                axr.plot(block.x,
+                         (block.reference - block.measured) / denom * 100,
+                         color=MUTED, ls=(0, (5, 3)), lw=1.4)
 
         for name, pred in block.predictions.items():
             st = style[name]
@@ -198,19 +221,29 @@ def plot_iv_blocks(
             axr.set_xlabel(block.x_label, fontsize=10)
             axr.set_ylabel("error\n(% of mean $|I|$)", fontsize=8.5)
             axr.tick_params(labelsize=8.5)
+            spread = list(block.predictions.values())
+            if block.reference is not None:
+                spread.append(block.reference)
             lim = np.nanmax([np.nanmax(np.abs((p - block.measured) / denom))
-                             for p in block.predictions.values()]) * 100
+                             for p in spread]) * 100
             lim = max(float(lim) * 1.25, 1.0)
             axr.set_ylim(-lim, lim)
 
     handles = [Line2D([], [], color=MEASURED, marker="o", mfc="none", mew=1.1,
                       ms=6, ls="-", alpha=0.6, label="Measured (ground truth)")]
+    if blocks[0].reference is not None:
+        handles.append(Line2D([], [], color=MUTED, ls=(0, (5, 3)), lw=1.6,
+                              label=blocks[0].reference_label))
     handles += [Line2D([], [], color=style[m]["color"], ls=style[m]["ls"],
                        marker=style[m]["marker"], markerfacecolor=SURFACE,
                        lw=1.9, ms=5.4, label=m) for m in methods]
-    fig.legend(handles=handles, loc="lower center", ncol=len(handles),
-               fontsize=10, labelcolor=INK2,
-               bbox_to_anchor=(0.5, 0.004), handlelength=2.8)
+    # Cap the columns so a long method list wraps instead of stretching the
+    # whole figure to fit one legend row.
+    fig.legend(handles=handles, loc="lower center",
+               ncol=min(len(handles), legend_cols), fontsize=10,
+               labelcolor=INK2,
+               bbox_to_anchor=(0.5, 0.002), handlelength=2.8,
+               columnspacing=2.2)
 
     if suptitle:
         fig.suptitle(suptitle, fontsize=14.5, color=INK, x=0.011, ha="left",
@@ -285,6 +318,19 @@ def repo_blocks(device_tags: list[str], curve_kind: str = "idvd"):
     from cryoml.utils import device_tag                    # noqa: E402
 
     p15_dir = ROOT / "out" / "pdk15_surrogate"
+    # Canonical 7-param + FD vectors live per BIN in the exported card
+    # manifest; the foundation study stores them per device.
+    manifest = json.loads(
+        (ROOT / "out" / "pdk_ml_selected" / "cards" / "manifest.json"
+         ).read_text())
+    card_params = {d: b["params"] for b in manifest["bins"]
+                   for d in b["devices"]}
+    foundation_params = {
+        r["device"]: r["methods"]["foundation_emu_search+fd"]["params"]
+        for r in json.loads(
+            (ROOT / "out" / "tables" / "foundation_emulator_study.json"
+             ).read_text())["devices"]}
+
     blocks = []
     for tag in device_tags:
         dev = next(d for d in PAPER_DEVICES
@@ -300,24 +346,39 @@ def repo_blocks(device_tags: list[str], curve_kind: str = "idvd"):
         bias, curve = picks[-1]
         idx = next(i for i, c in enumerate(curves) if c is curve)
 
-        wanted = {"Published card": rec["params_by_method"]["published"],
-                  "15-param surrogate, raw":
-                      rec["params_by_method"]["emu_search"],
-                  "15-param surrogate + FD":
-                      rec["params_by_method"]["emu_search+fd"]}
+        # Four ML methods, every one a full-precision extracted vector.
+        wanted = {
+            "7-param surrogate + FD": card_params[tag],
+            "7-param foundation + FD": foundation_params[tag],
+            "15-param surrogate, raw": rec["params_by_method"]["emu_search"],
+            "15-param surrogate + FD":
+                rec["params_by_method"]["emu_search+fd"],
+        }
         preds = {}
         for name, params in wanted.items():
             sims = simulate_pdk(dev.dev_type, dev.L_um, dev.W_um, curves,
                                 params=params, bin_index=bin_index)
             preds[name] = np.asarray(sims[idx])[:len(curve.Id)]
+        ref_sims = simulate_pdk(dev.dev_type, dev.L_um, dev.W_um, curves,
+                                params=rec["params_by_method"]["published"],
+                                bin_index=bin_index)
+        reference = np.asarray(ref_sims[idx])[:len(curve.Id)]
 
         x = curve.Vd if curve_kind == "idvd" else curve.Vg
         fixed = "V_{GS}" if curve_kind == "idvd" else "V_{DS}"
+        # Metric tags carry |bias|; restore the physical sign for pMOS.
+        bias = -abs(bias) if dev.dev_type == "pmos" else abs(bias)
+        meas = np.asarray(curve.Id, dtype=np.float64)
+        den = float(np.mean(np.abs(meas)))
+        metrics = {name: float(np.sqrt(np.mean((p - meas) ** 2)) / den)
+                   for name, p in preds.items()} if den > 0 else {}
         blocks.append(IVBlock(
             title=f"{dev.dev_type.replace('mos', 'MOS')}  "
                   f"L={dev.L_um:g} µm, W={dev.W_um:g} µm",
             x=np.asarray(x)[:len(curve.Id)], measured=np.asarray(curve.Id),
             predictions=preds, note=f"${fixed}$ = {bias:+.2f} V",
+            metrics=metrics, reference=reference,
+            reference_label="Published card (paper parameters)",
             x_label="$|V_{DS}|$ (V)" if curve_kind == "idvd"
                     else "$|V_{GS}|$ (V)"))
     return blocks
