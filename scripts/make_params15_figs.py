@@ -41,14 +41,16 @@ FIGS = ROOT / "figs"
 # Two selected modes (dark is re-stepped for the dark surface, not an inversion).
 THEMES = {
     "light": {
-        "surface": "#fcfcfb", "ink": "#0b0b0b", "ink2": "#52514e",
-        "muted": "#898781", "grid": "#e1e0d9", "axis": "#c3c2b7",
-        "p7": "#2a78d6", "p15": "#eb6834", "base": "#898781",
+        # No pure black anywhere: warm near-neutral inks keep the coloured
+        # series the loudest thing on the page.
+        "surface": "#fcfcfb", "ink": "#2b2a28", "ink2": "#5c5a55",
+        "muted": "#a3a099", "grid": "#eceae4", "axis": "#d5d3cb",
+        "p7": "#2a78d6", "p15": "#eb6834", "base": "#b0ada5",
     },
     "dark": {
         "surface": "#1a1a19", "ink": "#ffffff", "ink2": "#c3c2b7",
-        "muted": "#898781", "grid": "#2c2c2a", "axis": "#383835",
-        "p7": "#3987e5", "p15": "#d95926", "base": "#898781",
+        "muted": "#8f8d86", "grid": "#2c2c2a", "axis": "#3f3f3c",
+        "p7": "#3987e5", "p15": "#d95926", "base": "#7d7a74",
     },
 }
 

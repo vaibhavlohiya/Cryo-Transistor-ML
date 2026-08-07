@@ -40,16 +40,24 @@ ROOT = Path(__file__).resolve().parents[1]
 FIGS = ROOT / "figs"
 
 # --- style -----------------------------------------------------------------
-SURFACE, INK, INK2, MUTED = "#fcfcfb", "#0b0b0b", "#52514e", "#898781"
-GRID, AXIS = "#e1e0d9", "#c3c2b7"
-MEASURED = "#0b0b0b"
+# Nothing is pure black: the ink steps are warm near-neutrals, and the
+# measured series is a mid grey so the coloured methods stay the loudest
+# thing on the panel.
+SURFACE, INK, INK2, MUTED = "#fcfcfb", "#2b2a28", "#5c5a55", "#a3a099"
+GRID, AXIS = "#eceae4", "#d5d3cb"
+MEASURED = "#6f6c66"
 
-# colour + dash + marker per method slot; all three carry identity.
+# Colour + dash + marker per slot; all three carry identity, so the panels
+# survive greyscale and colour-vision deficiency. These four hues are the
+# only 4-set from the reference palette that clears the all-pairs CVD and
+# normal-vision gates on a light surface, so the *hues* are fixed — the
+# refresh is in the weight and dash rhythm, not new hexes. The last slot is
+# solid: it reads as the settled answer rather than one more candidate.
 METHOD_STYLES = [
-    {"color": "#2a78d6", "ls": (0, (6, 2)), "marker": "s"},
-    {"color": "#eb6834", "ls": (0, (1.6, 1.6)), "marker": "^"},
-    {"color": "#1baf7a", "ls": (0, (7, 2, 1.5, 2)), "marker": "D"},
-    {"color": "#4a3aa7", "ls": (0, (3, 1.4, 1, 1.4, 1, 1.4)), "marker": "v"},
+    {"color": "#2a78d6", "ls": (0, (7, 2.6)), "marker": "o"},
+    {"color": "#1baf7a", "ls": (0, (1.4, 2.2)), "marker": "^"},
+    {"color": "#eb6834", "ls": (0, (6, 2.2, 1.4, 2.2)), "marker": "s"},
+    {"color": "#4a3aa7", "ls": "-", "marker": "D"},
 ]
 
 
@@ -101,7 +109,7 @@ def _apply_style() -> None:
         "savefig.facecolor": SURFACE, "text.color": INK,
         "axes.labelcolor": INK2, "axes.edgecolor": AXIS,
         "xtick.color": INK2, "ytick.color": INK2,
-        "grid.color": GRID, "grid.linewidth": 0.7, "grid.alpha": 0.9,
+        "grid.color": GRID, "grid.linewidth": 0.8, "grid.alpha": 1.0,
         "axes.grid": True, "axes.axisbelow": True,
         "font.family": "sans-serif", "font.sans-serif": ["DejaVu Sans"],
         "figure.dpi": 120, "legend.frameon": False,
@@ -115,7 +123,7 @@ def plot_iv_blocks(
     residuals: bool = True,
     log_y: bool = False,
     scale: float = 1e6,
-    marker_every: int = 6,
+    marker_every: int = 9,
     metrics_loc: str = "lower right",
     suptitle: str = "",
     subtitle: str = "",
@@ -168,15 +176,16 @@ def plot_iv_blocks(
         if denom <= 0 or not np.isfinite(denom):
             denom = np.nan
 
-        # ground truth: solid faint spine + open circles, drawn on top
-        ax.plot(block.x, meas, "-", color=MEASURED, lw=1.0, alpha=0.35,
-                zorder=5)
-        ax.plot(block.x, meas, "o", mfc="none", mec=MEASURED, mew=1.1,
-                ms=5.2, ls="none", zorder=6, label="Measured")
+        # Ground truth: a soft grey band the curves sit inside, plus sparse
+        # open circles. Reads as "the data" without shouting over the fits.
+        ax.plot(block.x, meas, "-", color=MEASURED, lw=4.2, alpha=0.20,
+                solid_capstyle="round", zorder=2)
+        ax.plot(block.x, meas, "o", mfc=SURFACE, mec=MEASURED, mew=1.15,
+                ms=4.4, ls="none", markevery=2, zorder=6, label="Measured")
 
         if block.reference is not None:
             ax.plot(block.x, np.abs(block.reference) * scale, color=MUTED,
-                    ls=(0, (5, 3)), lw=1.6, zorder=3,
+                    ls=(0, (4, 2.6)), lw=1.5, zorder=3,
                     label=block.reference_label)
             if axr is not None:
                 axr.plot(block.x,
@@ -186,13 +195,13 @@ def plot_iv_blocks(
         for name, pred in block.predictions.items():
             st = style[name]
             ax.plot(block.x, np.abs(pred) * scale, color=st["color"],
-                    ls=st["ls"], lw=1.9, marker=st["marker"], ms=4.6,
+                    ls=st["ls"], lw=1.7, marker=st["marker"], ms=4.4,
                     markevery=marker_every, markerfacecolor=SURFACE,
-                    markeredgewidth=1.1, label=name, zorder=4)
+                    markeredgewidth=1.15, label=name, zorder=4)
             if axr is not None:
                 axr.plot(block.x, (pred - block.measured) / denom * 100,
-                         color=st["color"], ls=st["ls"], lw=1.6,
-                         marker=st["marker"], ms=4.0, markevery=marker_every,
+                         color=st["color"], ls=st["ls"], lw=1.5,
+                         marker=st["marker"], ms=3.8, markevery=marker_every,
                          markerfacecolor=SURFACE, markeredgewidth=1.0)
 
         if log_y:
@@ -217,7 +226,7 @@ def plot_iv_blocks(
             ax.set_xlabel(block.x_label, fontsize=10)
         else:
             ax.tick_params(labelbottom=False)
-            axr.axhline(0, color=AXIS, lw=1.0, zorder=2)
+            axr.axhline(0, color=MUTED, lw=1.0, zorder=2)
             axr.set_xlabel(block.x_label, fontsize=10)
             axr.set_ylabel("error\n(% of mean $|I|$)", fontsize=8.5)
             axr.tick_params(labelsize=8.5)
@@ -229,8 +238,9 @@ def plot_iv_blocks(
             lim = max(float(lim) * 1.25, 1.0)
             axr.set_ylim(-lim, lim)
 
-    handles = [Line2D([], [], color=MEASURED, marker="o", mfc="none", mew=1.1,
-                      ms=6, ls="-", alpha=0.6, label="Measured (ground truth)")]
+    handles = [Line2D([], [], color=MEASURED, marker="o", mfc=SURFACE,
+                      mew=1.15, ms=5.6, ls="-", lw=3.0, alpha=0.55,
+                      label="Measured (ground truth)")]
     if blocks[0].reference is not None:
         handles.append(Line2D([], [], color=MUTED, ls=(0, (5, 3)), lw=1.6,
                               label=blocks[0].reference_label))
