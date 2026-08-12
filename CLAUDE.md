@@ -18,8 +18,11 @@ bulk NGSpice jobs by default.
 - Upstream: `ogzamour/CryoPDK_Skywater130nm_ML`, commit
   `39b1e518e25120104225b8fa19f4cfc61a6766b3`, vendored at
   `data/raw/CryoPDK_Skywater130nm_ML`.
-- Simulator: conda-forge ngspice-41 at
-  `/Users/anrunw/cryo-ng41/mm/envs/ng41/bin/ngspice`.
+- Simulator: conda-forge **ngspice-41**. On this machine it is
+  `/opt/homebrew/Caskroom/miniconda/base/envs/ng41/bin/ngspice`. (Artifacts
+  and docs written before the checkout moved still record the original
+  author's path `/Users/anrunw/cryo-ng41/mm/envs/ng41/bin/ngspice`, which
+  does not exist here — the major version is what must match, not the path.)
 - pFET card: the upstream `update_sky130_fd_pr__pfet_01v8_lvt__tt_77k.corner.spice`.
 - Metric: the faithful `rrmsCalc.py` port in `src/cryoml/metrics.py`.
 - Tuned parameters: `VTH0, U0, NFACTOR, VSAT, DELTA, RDSW, ETA0` only.
@@ -39,7 +42,7 @@ Environment (every Python invocation needs both):
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-export NGSPICE_BIN=<path to a conda-forge ngspice-41 binary>
+export NGSPICE_BIN=/opt/homebrew/Caskroom/miniconda/base/envs/ng41/bin/ngspice
 export PYTHONPATH=src
 python scripts/setup_data.py          # validate pinned upstream, install pFET card
 ```
@@ -60,6 +63,7 @@ PYTHONPATH=src .venv/bin/python -m unittest \
   tests.test_metrics.ConfirmedSetupMetricTests.test_clean_current_zeroes_glitches_before_last_zero
 .venv/bin/python -m compileall -q src scripts
 .venv/bin/python scripts/setup_data.py --skip-clone   # revalidate pinned inputs
+.venv/bin/python scripts/plot_iv_comparison.py --demo  # figure self-test, no sim
 git diff --check
 ```
 
@@ -95,10 +99,40 @@ NGSpice re-simulation -> frozen-inclusion RRMS scoring -> tables/figures/cards.
   only) and the confirmed `rrmsCalc.py` port (`device_rrms_new`): per-curve
   RMSE/mean|I_meas| on 11 fixed curves with glitch cleaning, trims, and
   curve-exclusion rules. This is the only reportable metric.
-- `pdk_extract.py` — the seven-parameter theta layout (order fixed:
+- `pdk_extract.py` — the theta layout (canonical order fixed:
   vth0, u0, nfactor, vsat, delta, rdsw, eta0), the +/-10% box transform, the
   frozen-inclusion objective, and the FD least-squares polish that perturbs
   card parameters through fresh NGSpice runs.
+
+### Parameter sets
+
+The tuned theta vector is selectable. `pdk_extract.PARAM_SETS` holds
+`params7` (the canonical protocol; `PARAMS15[:7] == PARAMS7`) and `params15`,
+a labeled experiment adding `pclm, pdiblc1, pdiblc2, ags, ua, ub, voff, prwg`.
+`pdk_ml_extract.py` and `pdk_gen_data.py` take `--param-set`; the scripts
+export `CRYOML_PARAM_SET` so multiprocessing spawn workers, which re-import
+the module in a fresh interpreter, resolve the same set. Because
+`ACTIVE_PARAMS` is bound once at import, tests that need the other set patch
+`px.ACTIVE_PARAMS` directly (see `tests/test_param_sets.py`).
+
+Zero-published parameters are dead inside a multiplicative +/-10% box:
+`pdiblc1` is live only on nMOS bins and `prwg` only on pMOS, so each device
+searches 14 live dimensions under `params15`. Its data and results live in
+`data/processed/pdk_synth_params15*` and `out/pdk15_surrogate`,
+`out/pdk15_probe_n{30000,100000}` (the 2-device sample-size probe driven by
+`scripts/run_params15_probe.sh`). `params15` is **not** canonical — see the
+reporting policy below.
+
+### Generated artifacts that embed absolute paths
+
+`ensure_pdk77k()` writes `data/processed/pdk77k/` (the two patched 77 K
+corner cards plus the `sky130_77k.lib.spice` wrapper) with absolute
+`.include` lines, and NGSpice-backed stages record `ngspice_bin` in
+`out/tables/simulator_verification.json`. These are committed, so any run on
+a different checkout path or simulator install shows them as modified in
+`git status`. That churn is expected regeneration, not a substantive change —
+do not "fix" it by hand, and do not commit the path rewrite unless the move
+is intentional.
 
 Each experiment series writes to its own `out/` directory
 (`out/pdk_direct_mlp`, `out/pdk_ml_emu_raw`, `out/pdk_ml_emu`,
@@ -107,6 +141,16 @@ export is `out/pdk_ml_selected/cards`. `scripts/make_ml_variants.py` splits a
 surrogate run into the `emu_search` / `emu_search+fd` stages and fails rather
 than substituting a missing stage. Reporting scripts (`pdk_compare.py`,
 `make_paper_tables.py`, `make_figs.py`) read only these fixed series.
+
+Figure scripts read committed result tables rather than hardcoded numbers:
+`make_figs.py`, `make_scaling_fig.py`, `make_params15_figs.py` (light + dark,
+`--pdf` for vector), and `make_slide_plots.py` / `make_simple_slides.py`.
+`plot_iv_comparison.py` renders measured-vs-N-method I-V panels with
+RRMS-normalised residual strips; `--demo` self-tests on synthetic arrays with
+no repo data or simulator, while `--from-repo` re-simulates every method in
+NGSpice and is compute-heavy. Both figure modules document their palette's
+CVD/contrast margins in the module docstring — preserve that reasoning when
+changing colors.
 
 `docs/METHODS.md` holds metric/method definitions; `docs/RESEARCH_LOG.md` is
 the append-only history; `CONTRIBUTING.md` states the shared-asset and
@@ -142,6 +186,16 @@ Every I-V figure must show measured points, the NGSpice curve from the paper's
 published parameters, and NGSpice curves re-simulated from the fixed ML
 parameter predictions (direct MLP, surrogate raw, surrogate + FD). Never plot
 the neural emulator's current output as if it were the final physical curve.
+
+The `params15` study is a labeled experiment, not the canonical protocol. It
+beats the canonical 7-parameter surrogate+FD on every aggregate
+(all-device `0.2143` vs `0.2290`; 18/18 wins vs the published card, full
+report in `out/tables/params15_study.{md,json,csv}`), and a better number is
+exactly why it must stay labeled: it changes the tuned theta vector, so it is
+not comparable to the paper's method. It does not enter Table 4/6, headline
+RRMS, or the canonical card export. Note also that raw 15-D search is *worse*
+than raw 7-D (`0.2699` vs `0.2357`) at equal sample budget and FD recovers it
+— report the raw and polished stages as a pair, never the polished alone.
 
 The completed `foundation_plus_fd` fixed exploratory series may also appear,
 clearly labeled. Retain `high_voltage_guarded` results in diagnostic tables and
