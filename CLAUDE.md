@@ -54,6 +54,14 @@ setup, not valid for the confirmed workflow). Always confirm the simulator is
 ngspice-41 before any NGSpice-backed run. On a fresh checkout, `.venv` and
 `data/raw/` do not exist until the setup steps above have been run.
 
+Install from `requirements.txt`, not `pip install -e .`: the two dependency
+lists have diverged. `pyproject.toml` still declares `cma`, which nothing
+imports, and omits `python-pptx`, which `make_simple_slides.py` needs.
+
+The 20 unit tests pass in well under a second and need neither NGSpice nor
+`data/raw/` — they are pure-Python checks of the metric port, the parameter
+sets, and the study scripts' logic.
+
 Tests and lightweight checks (safe to run anytime):
 
 ```bash
@@ -73,10 +81,15 @@ heavily; treat it as a compute-heavy stage.
 Full reproduction order and exact production flags are in `docs/HANDOFF.md`
 ("Reproduction commands") and `README.md`. Stage order: `verify_simulator.py`
 -> `pdk_baseline.py` -> `pdk_gen_data.py` -> `pdk_ml_extract.py` ->
-`make_ml_variants.py` -> `pdk_direct_mlp.py` -> FD studies -> scaling ->
-exploratory diagnostics -> `pdk_compare.py` / `export_ml_cards.py` /
-`make_paper_tables.py` / `make_figs.py` / `make_simple_slides.py`.
-Training scripts take `--device mps`.
+`make_ml_variants.py` -> `pdk_direct_mlp.py` -> FD studies
+(`fd_parameter_study.py`, `direct_mlp_fd_study.py`) -> `scaling_study.py` ->
+exploratory diagnostics (`pdk_foundation_emulator.py`,
+`high_voltage_guarded_study.py`, `per_bias_diagnostic.py`) ->
+`pdk_compare.py` / `export_ml_cards.py` / `make_paper_tables.py` /
+`make_figs.py` / `make_simple_slides.py`. Training scripts take
+`--device mps`. Each of those stages is compute-heavy — see the resource
+policy below, and note that the reporting scripts at the end of the chain
+depend on series artifacts no longer on disk (see "Generated artifacts").
 
 ## Architecture
 
@@ -142,6 +155,19 @@ surrogate run into the `emu_search` / `emu_search+fd` stages and fails rather
 than substituting a missing stage. Reporting scripts (`pdk_compare.py`,
 `make_paper_tables.py`, `make_figs.py`) read only these fixed series.
 
+**Those series directories are gitignored and are not present on this
+checkout** — `.gitignore` keeps only `out/tables/*.{md,json,csv}` and
+`out/pdk_ml_selected/cards/`. The per-device `.npz` sims and `ml_<tag>.json`
+vectors that `pdk_compare.py`, `make_paper_tables.py`, and `make_figs.py`
+consume were pruned after the tables and figures were generated, so those
+three scripts **cannot run as-is**; they fail on a missing series rather than
+silently degrading. The committed `out/tables/` files and `figs/*.png` are the
+surviving record of the completed run. Regenerating any of them means
+re-running the compute-heavy extraction stages that produced the series —
+which the handoff says not to do by default. Treat a reporting-script failure
+here as this missing-artifact condition, not as a code bug. `out/pdk_baseline`
+and the `out/pdk15_*` series do exist locally (also gitignored).
+
 Figure scripts read committed result tables rather than hardcoded numbers:
 `make_figs.py`, `make_scaling_fig.py`, `make_params15_figs.py` (light + dark,
 `--pdf` for vector), and `make_slide_plots.py` / `make_simple_slides.py`.
@@ -152,8 +178,30 @@ NGSpice and is compute-heavy. Both figure modules document their palette's
 CVD/contrast margins in the module docstring — preserve that reasoning when
 changing colors.
 
+### Candidate-parameter screen
+
+`docs/CANDIDATE_PARAMETERS.md` (which BSIM4 parameters beyond the 15 actually
+move the 77 K fit) and `docs/MODEL_EXPANSION.md` (scaling past 15 parameters,
+the isothermal-77 K assumption, process vs. electrical parameters) are
+**analysis-only design notes** — no protocol, metric, or card change. Their
+data is committed at `out/tables/candidate_showmod_survey.json` (Step A: 61
+parameters resolved on all 18 native bins) and
+`out/tables/candidate_sensitivity.{json,csv}` (Step B: 244 one-at-a-time
+perturbation records over 4 devices); `scripts/make_candidate_figs.py` reads
+those tables to render `figs/candidate_*.png` in light and dark.
+
+The screen's own generator was a scratchpad script and was never committed —
+only its outputs and the figure script were. Reproducing or extending Step A/B
+means rewriting it against `pdk_extract.read_bin_params()` and
+`spice_pdk.simulate_pdk()`. Note the trap the note records: several entries
+are expression-valued in the corner files (`dvt0={2.4422*dvt0_nom}`, the
+`MC_MM_SWITCH` forms on `vth0`/`nfactor`/`voff`/`toxe`), so a text-parsing
+screen mislabels them as zero — the readback must run NGSpice, as
+`read_bin_params()` does.
+
 `docs/METHODS.md` holds metric/method definitions; `docs/RESEARCH_LOG.md` is
-the append-only history; `CONTRIBUTING.md` states the shared-asset and
+the append-only history (`docs/CODEX_RESEARCH_LOG.md` is a parallel log from a
+different agent); `CONTRIBUTING.md` states the shared-asset and
 experiment-integrity conventions.
 
 ## Non-negotiable reporting policy

@@ -563,3 +563,95 @@ parameters: + `pclm, pdiblc1, pdiblc2, ags, ua, ub, voff, prwg`.
 - Status: labeled experiment per protocol. Not the canonical export; no
   Table 4/6 or figure changes. Full report:
   `out/tables/params15_study.{md,json,csv}`.
+
+## I-V reconstruction comparison figures (2026-08-06)
+
+New reporting tool, no new result: `scripts/plot_iv_comparison.py` renders
+measured data against N methods, each panel carrying a residual strip
+normalised by the curve's mean |I| — the same normalisation RRMS uses, so
+the strip decomposes the headline number per point. Motivation: on a linear
+I-V plot two methods routinely agree to within a line width, which hides
+exactly the differences these comparisons exist to show.
+
+- Colour, dash pattern *and* marker all encode method, so panels survive
+  greyscale printing and colour-vision deficiency. The four line colours
+  clear all-pairs CVD/contrast checks on a light surface (worst CVD dE 9.2,
+  worst normal-vision dE 16.3). No four-hue set cleared them on dark, so
+  this figure is **light-mode only by design** — unlike the other figure
+  modules, which ship light+dark. Preserve that reasoning if colours change.
+- `--demo` self-tests on synthetic arrays with no repo data or simulator;
+  `--from-repo` re-simulates every method in NGSpice and is compute-heavy.
+- Committed: `figs/iv_method_comparison_idvd.png` (real, four methods vs
+  measured) and `figs/iv_method_comparison_demo.png`. The demo figure is a
+  **synthetic self-test, not a result** — do not cite it as one.
+- Figure styling pass (2026-08-07) softened chrome repo-wide: no pure black.
+
+## params15 sample-size probe (2026-08-12)
+
+Two-device probe (`nmos_L1_W3`, `pmos_L4_W7`) driven by
+`scripts/run_params15_probe.sh`, asking whether the main study's 15-D result
+was sample-starved — the raw 15-D search having come in worse than raw 7-D
+at equal budget.
+
+- 30k samples: raw 0.2950, +FD 0.1563. 100k samples: raw 0.1574,
+  +FD 0.1487. Baseline for the pair 0.2150; both budgets win 2/2.
+- Reading: **10x the data moves the raw search a lot and the polished
+  result barely at all.** The main study's raw-15D deficit is a search
+  problem, not a data problem, and FD already absorbs it. This is the same
+  pattern the all-18 scaling axis found in 7-D (emulator MSE ~9.5x better,
+  post-FD RRMS flat), now reproduced in 15-D — evidence the plateau is a
+  property of the pipeline, not of a particular theta vector.
+- Consequence: a wider box, not a bigger sample, is the live follow-up to
+  the 67/270 box-edge pegging.
+- Results (`out/pdk15_probe_n{30000,100000}/`) are gitignored; only the
+  driver script is committed. Numbers above are from the local run.
+
+## Candidate-parameter screen (2026-08-12)
+
+Measured answer to "which BSIM4 parameters would be worth adding after 15",
+run because the previous expansion picked its 8 by equation reasoning.
+Two steps, both on the confirmed setup (ngspice-41, `temp=-196.15`, native
+bins, frozen published-card inclusion), 26 s per device pair:
+
+- **Step A** — `showmod` readback of 61 candidate parameters on all 18
+  native bins → `out/tables/candidate_showmod_survey.json`. All 61 are
+  echoed on all 18 bins, so `read_bin_params()` raises for none of them.
+  Four entries are expression-valued (`dvt0={2.4422*dvt0_nom}`, the
+  `MC_MM_SWITCH` forms on `vth0`/`nfactor`/`voff`/`toxe`) and resolve
+  correctly only because the readback runs NGSpice; **any text-parsing
+  screen mislabels those four as zero.**
+- **Step B** — 244 one-at-a-time perturbation records over 4 devices
+  (`nmos_L0p15_W1p6`, `nmos_L1_W3`, `pmos_L0p35_W1p6`, `pmos_L4_W7`) →
+  `out/tables/candidate_sensitivity.{json,csv}`. 180 respond, 64 inert.
+  Ranking quantity `d_rrms_pm10` = max |ΔRRMS| inside the existing ±10%
+  box; `maxrel_large` separates genuinely inert from box-frozen.
+- Tier 1, not already in the set: `k1` 6.08e-01, `dsub` 1.32e-01,
+  `dvt1` 1.31e-01, `wr` 9.42e-02, `a2` 4.38e-02 (nMOS only), `b0`
+  4.18e-02. Tier 2: `k2`, `k3`, `wint`, all an order of magnitude down.
+- **Three free wins inside the existing 15**, to do before adding anything:
+  re-center `vsat` on the bins where it is non-physical, and add additive
+  box fallbacks for `pdiblc1` on pMOS and `prwg` on nMOS (both currently
+  frozen at zero, worth ~10% of the current on short-channel pMOS).
+- **The screen overturned the equation-reasoned draft that preceded it.**
+  `drout` was the predicted top pick ("if only one parameter is added, make
+  it this one") and measures 1.68e-05, weak on all four devices —
+  `pdiblc2` already covers the effect. `eu` was predicted Tier 1 and is
+  exactly inert because `mobmod=0` never uses it. `k1` was predicted
+  structurally unidentifiable and is the strongest candidate found.
+  Generalisation: **mechanism membership does not predict sensitivity** —
+  screen before each expansion rather than reasoning from a parameter's
+  role.
+- Untested half: collinearity. Sensitivity is necessary, not sufficient —
+  a sensitive parameter collinear with one already in the set adds nothing,
+  and the `wr`/`lint` degeneracy claim in particular remains unverified.
+- Status: analysis only. No protocol, metric, or card change. Notes in
+  `docs/CANDIDATE_PARAMETERS.md` (which parameters) and
+  `docs/MODEL_EXPANSION.md` (scaling past 15, the isothermal-77 K limit,
+  process vs. electrical parameters). Figures via
+  `scripts/make_candidate_figs.py` → `figs/candidate_{sensitivity,
+  length_dependence,vsat,box_locked}[_dark].png`, read from the committed
+  tables.
+- **Reproducibility gap:** the Step A/B generator was a session scratchpad
+  script and was never committed — only its outputs and the figure script
+  were. Re-running or extending the screen means rewriting it against
+  `pdk_extract.read_bin_params()` and `spice_pdk.simulate_pdk()`.
