@@ -1,4 +1,4 @@
-.include "/Users/anrunw/Documents/cryo-ml/data/raw/lod.spice"
+.include "/Users/vaibhavlohiya/Documents/FNAL-CRYOMLPDK/Cryo-Transistor-ML/data/raw/lod.spice"
 .param mc_mm_switch = 0
 .param mc_pr_switch = 0
 .option scale=1.0u

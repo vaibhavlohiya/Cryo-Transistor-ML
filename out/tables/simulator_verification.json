@@ -1,5 +1,5 @@
 {
-  "ngspice_bin": "/Users/anrunw/cryo-ng41/mm/envs/ng41/bin/ngspice",
+  "ngspice_bin": "/opt/homebrew/Caskroom/miniconda/base/envs/ng41/bin/ngspice",
   "ngspice_version": "** ngspice-41 : Circuit level simulation program",
   "upstream_repo_commit": "39b1e518e25120104225b8fa19f4cfc61a6766b3",
   "n_devices": 18,

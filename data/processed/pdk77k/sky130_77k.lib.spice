@@ -4,8 +4,8 @@
 .param mc_pr_switch=0
 .param my_gauss = 0
 .param m = 1
-.include "/Users/anrunw/Documents/cryo-ml/data/processed/pdk77k/sky130_fd_pr__nfet_01v8_lvt__tt_77k.corner.spice"
-.include "/Users/anrunw/Documents/cryo-ml/data/processed/pdk77k/sky130_fd_pr__pfet_01v8_lvt__tt_77k.corner.spice"
-.include "/Users/anrunw/Documents/cryo-ml/data/raw/pdk/sky130A/libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_01v8_lvt__mismatch.corner.spice"
-.include "/Users/anrunw/Documents/cryo-ml/data/raw/pdk/sky130A/libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8_lvt__mismatch.corner.spice"
+.include "/Users/vaibhavlohiya/Documents/FNAL-CRYOMLPDK/Cryo-Transistor-ML/data/processed/pdk77k/sky130_fd_pr__nfet_01v8_lvt__tt_77k.corner.spice"
+.include "/Users/vaibhavlohiya/Documents/FNAL-CRYOMLPDK/Cryo-Transistor-ML/data/processed/pdk77k/sky130_fd_pr__pfet_01v8_lvt__tt_77k.corner.spice"
+.include "/Users/vaibhavlohiya/Documents/FNAL-CRYOMLPDK/Cryo-Transistor-ML/data/raw/pdk/sky130A/libs.ref/sky130_fd_pr/spice/sky130_fd_pr__nfet_01v8_lvt__mismatch.corner.spice"
+.include "/Users/vaibhavlohiya/Documents/FNAL-CRYOMLPDK/Cryo-Transistor-ML/data/raw/pdk/sky130A/libs.ref/sky130_fd_pr/spice/sky130_fd_pr__pfet_01v8_lvt__mismatch.corner.spice"
 .endl
